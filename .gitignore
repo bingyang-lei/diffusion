@@ -12,6 +12,7 @@
 # Generated files
 *.log
 *.jsonl
+*.ipynb
 *.md
 !README.md
 !**/README.md
