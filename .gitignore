@@ -17,6 +17,8 @@
 !**/README.md
 __pycache__/
 *.pyc
+/download-dataset.py
+/get_test_jsonl.py
 
 # Nested dflash outputs and local benchmark helpers
 /dflash/wandb/

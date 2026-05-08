@@ -3,18 +3,11 @@
 import requests
 import time
 import json
-port = 8001
+port = 30000
 url = f"http://localhost:{port}/v1/responses"
 context = """
-Solve the following math problem step by step. 
-The last line of your response should be of the form Answer: 
-\\boxed{$Answer} where $Answer is the answer to the problem.\n\n
-In triangle $ABC$, $\\sin \\angle A = \\frac{4}{5}$ and $\\angle A < 90^\\circ$. 
-Let $D$ be a point outside triangle $ABC$ such that $\\angle BAD = \\angle DAC$ and $\\angle BDC = 90^\\circ$. 
-Suppose that $AD = 1$ and that $\\frac{BD}{CD} = \\frac{3}{2}$. 
-If $AB + AC$ can be expressed in the form $\\frac{a\\sqrt{b}}{c}$ where $a, b, c$ are pairwise relatively prime integers, 
-find $a + b + c$.\n\nRemember to put your answer on its own line after \"Answer:\
-"""   # DAPO
+Janet had 22 green pens and 10 yellow pens. Then she bought 6 bags of blue pens and 2 bags of red pens. There were 9 pens in each bag of blue and 6 pens in each bag of red. How many pens does Janet have now?\nPlease reason step by step, and put your final answer within \\boxed{}
+"""   # a test case
 
 # context = """
 # Jen enters a lottery by picking $4$ distinct numbers from $S=\\{1,2,3,\\cdots,9,10\\}.
@@ -31,7 +24,7 @@ find $a + b + c$.\n\nRemember to put your answer on its own line after \"Answer:
 # \\[\\log_2\\left({z \\over xy}\right) = {1 \\over 4}\\]
 # Then the value of $\\left|\\log_2(x^4y^3z^2)\\right|$ is $\\tfrac{m}{n}$ where $m$ and $n$ are relatively prime positive integers. Find $m+n$.
 # """  # AIME answer: 33
-context = "hello, introduce yourself"
+# context = "hello, introduce yourself"
 # context = "Write a python function to find the longest chain which can be formed from the given set of pairs[]."
 
 
@@ -46,15 +39,13 @@ context = "hello, introduce yourself"
 # print(json.dumps(response.json(), indent=4, ensure_ascii=False))
 # end_time = time.time()
 # print(f"Response time taken: {end_time - start_time} seconds")
-
+context = "Solve the following math problem. Make sure to put the answer (and only answer) inside \\boxed{}.\n\nHow many 6-digit numbers $\\overline{a_1a_2a_3a_4a_5a_6}$ (where $a_1 \\neq 0$) are there, with $0 \\leq a_i \\leq 9$ for each $i$, such that $a_1 < a_2 > a_3 < a_4 > a_5 < a_6$?"
 url2 = f"http://localhost:{port}/v1/chat/completions"
 data2 = {
     "model": "None",
     "messages": [{"role": "user", "content": context}],
-    "max_tokens": 8192,
-    "temperature": 0,
-    "top_p": 1.0,
-    "top_k": 1,
+    "max_tokens": 4096,
+    "temperature": 1
     # "chat_template_kwargs": {"enable_thinking": False}
 }
 start_time2 = time.time()

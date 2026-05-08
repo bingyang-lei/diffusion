@@ -36,12 +36,26 @@ class BenchmarkMetrics:
 
 
 DEFAULT_DAPO_PATH = "/mnt/shared-storage-user/p1-shared/leihaodi/data/dapo-math-17k/dapo-math-17k.jsonl"
-TARGET_MODEL_PATH = "/mnt/shared-storage-user/leihaodi/pretrain/mtp-debug/qwen3-kimi-260117-sft-new-tulu3-iter0021863"
-# TARGET_MODEL_PATH = "/mnt/shared-storage-user/p1-shared/Qwen/Qwen3-4B"
+# TARGET_MODEL_PATH = "/mnt/shared-storage-user/leihaodi/pretrain/mtp-debug/qwen3-kimi-260117-sft-new-tulu3-iter0021863"
+TARGET_MODEL_PATH = "/mnt/shared-storage-user/p1-shared/Qwen/Qwen3-4B"
 def _build_base_url(host: str, port: int) -> str:
     if host.startswith(("http://", "https://")):
         return f"{host}:{port}"
     return f"http://{host}:{port}"
+
+
+def _build_sampling_params(temperature: float, max_new_tokens: int) -> dict:
+    temperature = float(temperature)
+    sampling_params: dict = {
+        "temperature": temperature,
+        "max_new_tokens": int(max_new_tokens),
+    }
+    if temperature == 0:
+        sampling_params.update({
+            "top_p": 1.0,
+            "top_k": 1,
+        })
+    return sampling_params
 
 
 def _send_generate(
@@ -53,12 +67,10 @@ def _send_generate(
     temperature: float,
     timeout_s: int,
     ) -> dict:
-    sampling_params: dict = {
-        "temperature": float(temperature),
-        "top_p": 1.0,
-        "top_k": 1,
-        "max_new_tokens": int(max_new_tokens),
-    }
+    sampling_params = _build_sampling_params(
+        temperature=temperature,
+        max_new_tokens=max_new_tokens,
+    )
     if stop:
         sampling_params["stop"] = stop
     resp = requests.post(
@@ -84,12 +96,10 @@ def _send_generate_batch(
     ) -> list[dict]:
     if not prompts:
         return []
-    sampling_params: dict = {
-        "temperature": float(temperature),
-        "top_p": 1.0,
-        "top_k": 1,
-        "max_new_tokens": int(max_new_tokens),
-    }
+    sampling_params = _build_sampling_params(
+        temperature=temperature,
+        max_new_tokens=max_new_tokens,
+    )
     if stop:
         sampling_params["stop"] = stop
     resp = requests.post(
@@ -205,6 +215,16 @@ def load_mbpp_prompts(num: Optional[int]) -> List[str]:
         prompts.append(item["turns"][0])
     return prompts
 
+def load_humaneval_prompts(num: Optional[int]) -> List[str]:
+    prompts: List[str] = []
+    dataset = load_dataset("openai/openai_humaneval", split="test")
+    prompt_fmt = "Write a solution to the following problem and make sure that it passes the tests:\n```python\n{prompt}\n```"
+    dataset = dataset.map(lambda x: {"turns": [prompt_fmt.format(**x)]})
+    for i in range(min(num, len(dataset))):
+        item = dataset[i]
+        prompts.append(item["turns"][0])
+    return prompts
+
 def load_mtbench_prompts(num: Optional[int]) -> List[str]:
     prompts: List[str] = []
     dataset = load_dataset("HuggingFaceH4/mt_bench_prompts", split="train")
@@ -245,7 +265,6 @@ def load_dapo_prompts(dapo_file: str, num: Optional[int]) -> List[str]:
         raise ValueError(f"No valid prompts loaded from {dapo_file}")
     return prompts
 
-
 def run_benchmark(
     port: int = 30000,
     num: int = 10,
@@ -284,6 +303,8 @@ def run_benchmark(
         prompts = load_mtbench_prompts(num=num)
     elif bench_list == "aime24":
         prompts = load_aime24_prompts(num=num)
+    elif bench_list == "humaneval":
+        prompts = load_humaneval_prompts(num=num)
     else:
         if context_file:
             with open(context_file, "r", encoding="utf-8") as f:
@@ -306,7 +327,6 @@ Please reason step by step, and put your final answer within \boxed{}."""
     ) for prompt in prompts]
 
     print("answers:", answers)
-    exit()
     # print("======================")
     # print("After tokenization, prompts[0]:", prompts[0])
     # print("======================")
@@ -372,9 +392,9 @@ def main():
     parser.add_argument(
         "--bench-list",
         type=str,
-        choices=["chat", "dapo", "math500", "mbpp", "gsm8k", "mt-bench", "aime24"],
+        choices=["chat", "dapo", "math500", "mbpp", "gsm8k", "mt-bench", "aime24", "humaneval"],
         default="chat",
-        help="Benchmark task type: chat or dapo or math500 or mbpp or gsm8k or mt-bench or aime24",
+        help="Benchmark task type: chat or dapo or math500 or mbpp or gsm8k or mt-bench or aime24 or humaneval",
     )
     parser.add_argument(
         "--dapo-file",
@@ -421,20 +441,30 @@ def main():
             continue
     print(f"Total completion_tokens: {total_completion_tokens}")
 
+    sampling_params = _build_sampling_params(
+        temperature=args.temperature,
+        max_new_tokens=args.max_tokens,
+    )
+    config = {
+        "num_rounds": args.num,
+        "batch_size": args.batch_size,
+        "total_requests": args.num * args.batch_size,
+        "host": args.host,
+        "port": args.port,
+        "max_tokens": args.max_tokens,
+        "temperature": args.temperature,
+        "timeout_s": args.timeout_s,
+        "bench_list": args.bench_list,
+        "dapo_file": args.dapo_file if args.bench_list == "dapo" else None,
+    }
+    if "top_p" in sampling_params:
+        config["top_p"] = sampling_params["top_p"]
+    if "top_k" in sampling_params:
+        config["top_k"] = sampling_params["top_k"]
+
     result = {
         "metrics": [asdict(metrics)],
-        "config": {
-            "num_rounds": args.num,
-            "batch_size": args.batch_size,
-            "total_requests": args.num * args.batch_size,
-            "host": args.host,
-            "port": args.port,
-            "max_tokens": args.max_tokens,
-            "temperature": args.temperature,
-            "timeout_s": args.timeout_s,
-            "bench_list": args.bench_list,
-            "dapo_file": args.dapo_file if args.bench_list == "dapo" else None,
-        },
+        "config": config,
     }
 
     print(f"Total requests: {len(outputs)}")
@@ -448,19 +478,20 @@ def main():
     if outputs and args.batch_size == 1:
         example_out = outputs[0]
         output = example_out.get("text", "")
-        print("Example output(first 1000 characters):", output[:1000] + "...")
+        print("Example output(first 100 characters):", output[:100] + "...")
         # print("Example meta:", example_out.get("meta_info", {}))
 
     if args.output:
         with open(args.output, "a", encoding="utf-8") as f:
             json.dump(result, f, indent=4, ensure_ascii=False)
             f.write(f"Total completion_tokens: {total_completion_tokens}\n")
+            f.write(f"the benchmark is: {args.bench_list}\n")
             # write example answer to a file
             if outputs and args.batch_size == 1:
                 example_out = outputs[0]
                 # output = example_out.get("text", "")
                 # f.write(f"Example output(first 100 characters): {output[:100] + '...'}\n")
-                f.write(f"Example meta: {example_out.get('meta_info', {})}\n")
+                # f.write(f"Example meta: {example_out.get('meta_info', {})}\n")
                 for i, out in enumerate(outputs):
                     meta_info = out.get("meta_info", {}) or {}
                     completion_tokens = meta_info.get("completion_tokens", None)
