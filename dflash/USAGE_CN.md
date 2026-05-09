@@ -174,3 +174,9 @@ bash sglang_run_bench.sh
 - 想验证 `benchmark.py` 逻辑、跑多卡 `torchrun`、关注 DFlash 内部 acceptance 行为：用 `run_benchmark.sh`。
 - 想基于 SGLang 服务看并发吞吐、端到端延迟、不同 attention backend 对比：用 `sglang_run_bench.sh`。
 
+
+# 以下是人类留言
+
+主要就是，运行diffusion/dflash/run_benchmark.sh，和diffusion/dflash/run_benchmark-8b.sh，测transformer上的推理速度。
+运行diffusion/dflash/sglang_run_bench.sh，测sglang上的推理速度。
+主要需要调的参数其实只有温度一个，因为我们都是测推理模型，都是思考模式，长度也都是8192.
