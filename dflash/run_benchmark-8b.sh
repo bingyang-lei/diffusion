@@ -18,7 +18,7 @@ else
 fi
 cd /mnt/shared-storage-user/leihaodi/diffusion/dflash
 # sleep 10000
-log_dir="/mnt/shared-storage-user/leihaodi/diffusion/logs/baseline"
+log_dir="/mnt/shared-storage-user/leihaodi/diffusion/qwen3-8b/baseline/draft.log"
 while [ $# -gt 0 ]; do
   case "$1" in
     --log-dir)
@@ -47,11 +47,11 @@ TASKS=(
   "mt-bench:80"
 
   "mgsm_zh:32"
-  # "acp_app_bool:32"
-  # "acp_app_gen:32"
   "swe-bench:128"
 
   "alpaca:128"
+    # "acp_app_bool:32"
+  # "acp_app_gen:32"
   # "livecodebench:128"
 )
 
@@ -59,7 +59,12 @@ print_case=false
 mkdir -p "$log_dir"
 DRAFT_MODELS=(
   # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash_data/epoch_5_step_295000"
-  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-1900/student-teacher-05-06/loss-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
+  # "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-1900/student-teacher-05-06/loss-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
+  # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash-resume-data-mathcode16k/epoch_5_step_6000"
+  # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash-resume-data-mathcode16k/epoch_9_step_10000"
+  "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_4_step_240000"
+  "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_4_step_200000"
+  "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_5_step_280000"
 )
 
 for draft_path in "${DRAFT_MODELS[@]}"; do
@@ -107,9 +112,9 @@ for draft_path in "${DRAFT_MODELS[@]}"; do
         ./benchmark.py \
         --dataset "$DATASET_NAME" \
         --max-samples "$MAX_SAMPLES" \
-        --model-name-or-path /mnt/shared-storage-user/p1-shared/Qwen/Qwen3-4B \
+        --model-name-or-path /mnt/shared-storage-user/p1-shared/Qwen/Qwen3-8B \
         --draft-name-or-path "$draft_path" \
-        --max-new-tokens 4096 \
+        --max-new-tokens 8192 \
         --block-size 16 \
         --temperature 0.0 \
         --skip-base \
@@ -184,7 +189,4 @@ done
 #   done
 # done
 
-python /mnt/shared-storage-user/leihaodi/gpu_stress_test.py
-# --enable-thinking \
-    # --skip-base \
-    # --block-size 8 \
+# python /mnt/shared-storage-user/leihaodi/gpu_stress_test.py
