@@ -22,6 +22,23 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
+
+def _build_sampling_params(max_new_tokens: int, temp: float) -> dict:
+    if temp == 0.0:
+        return {
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "top_k": 1,
+            "max_new_tokens": int(max_new_tokens),
+        }
+    return {
+        "temperature": float(temp),
+        "top_p": 0.95,
+        "top_k": 20,
+        "max_new_tokens": int(max_new_tokens),
+    }
+
+
 def _is_blackwell() -> bool:
     if envs.IS_BLACKWELL.get():
         return True
@@ -38,15 +55,11 @@ def _send_generate(
     prompt: str,
     *,
     max_new_tokens: int,
+    temp: float,
     stop: list[str],
     timeout_s: int,
 ) -> dict:
-    sampling_params: dict = {
-        "temperature": 0.0,
-        "top_p": 1.0,
-        "top_k": 1,
-        "max_new_tokens": int(max_new_tokens),
-    }
+    sampling_params = _build_sampling_params(max_new_tokens, temp)
     if stop:
         sampling_params["stop"] = stop
     resp = requests.post(
@@ -76,17 +89,13 @@ def _send_generate_batch(
     prompts: list[str],
     *,
     max_new_tokens: int,
+    temp: float,
     stop: list[str],
     timeout_s: int,
 ) -> list[dict]:
     if not prompts:
         return []
-    sampling_params: dict = {
-        "temperature": 0.0,
-        "top_p": 1.0,
-        "top_k": 1,
-        "max_new_tokens": int(max_new_tokens),
-    }
+    sampling_params = _build_sampling_params(max_new_tokens, temp)
     if stop:
         sampling_params["stop"] = stop
     resp = requests.post(
@@ -121,6 +130,7 @@ def _run_bench_requests(
     *,
     prompts: list[str],
     max_new_tokens: int,
+    temp: float,
     concurrency: int,
     batch_requests: bool,
     stop: list[str],
@@ -138,6 +148,7 @@ def _run_bench_requests(
                 base_url,
                 warmup_prompts,
                 max_new_tokens=max_new_tokens,
+                temp=temp,
                 stop=stop,
                 timeout_s=timeout_s,
             )
@@ -149,6 +160,7 @@ def _run_bench_requests(
                         base_url,
                         prompt,
                         max_new_tokens=max_new_tokens,
+                        temp=temp,
                         stop=stop,
                         timeout_s=timeout_s,
                     )
@@ -174,6 +186,7 @@ def _run_bench_requests(
                 base_url,
                 chunk_prompts,
                 max_new_tokens=max_new_tokens,
+                temp=temp,
                 stop=stop,
                 timeout_s=timeout_s,
             )
@@ -201,6 +214,7 @@ def _run_bench_requests(
                     base_url,
                     prompt,
                     max_new_tokens=max_new_tokens,
+                    temp=temp,
                     stop=stop,
                     timeout_s=timeout_s,
                 ): i
@@ -424,6 +438,16 @@ def main() -> None:
         help="Pass enable_thinking=True to tokenizer.apply_chat_template when building prompts.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=2048)
+    parser.add_argument(
+        "--temp",
+        type=float,
+        default=0.0,
+        help=(
+            "Sampling temperature. 0 keeps deterministic settings "
+            "(top_p=1.0, top_k=1); non-zero values use recommended sampling settings "
+            "(top_p=0.95, top_k=20)."
+        ),
+    )
     parser.add_argument("--timeout-s", type=int, default=3600)
     parser.add_argument("--mem-fraction-static", type=float, default=0.75)
     parser.add_argument("--disable-radix-cache", action="store_true")
@@ -484,6 +508,9 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for this sweep.")
 
+    sampling_params_for_report = _build_sampling_params(
+        int(args.max_new_tokens), float(args.temp)
+    )
     concurrencies = [int(x) for x in args.concurrencies.split(",") if x.strip()]
     concurrencies = [c for c in concurrencies if c >= 1]
     if not concurrencies:
@@ -603,6 +630,7 @@ def main() -> None:
                     baseline_url,
                     "Hello",
                     max_new_tokens=8,
+                    temp=float(args.temp),
                     stop=[],
                     timeout_s=min(int(args.timeout_s), 300),
                 )
@@ -617,6 +645,7 @@ def main() -> None:
                         baseline_url,
                         prompts=warmup_prompts[:conc] + measured_prompts[:n],
                         max_new_tokens=int(args.max_new_tokens),
+                        temp=float(args.temp),
                         concurrency=int(conc),
                         batch_requests=bool(args.batch_requests),
                         stop=[],
@@ -658,6 +687,7 @@ def main() -> None:
                 dflash_url,
                 "Hello",
                 max_new_tokens=8,
+                temp=float(args.temp),
                 stop=[],
                 timeout_s=min(int(args.timeout_s), 300),
             )
@@ -671,6 +701,7 @@ def main() -> None:
                     dflash_url,
                     prompts=warmup_prompts[:conc] + measured_prompts[:n],
                     max_new_tokens=int(args.max_new_tokens),
+                    temp=float(args.temp),
                     concurrency=int(conc),
                     batch_requests=bool(args.batch_requests),
                     stop=[],
@@ -705,6 +736,9 @@ def main() -> None:
     md_lines.append(f"- target_model: `{args.target_model}`")
     md_lines.append(f"- draft_model: `{args.draft_model}`")
     md_lines.append(f"- max_new_tokens: `{args.max_new_tokens}`")
+    md_lines.append(f"- temp: `{args.temp}`")
+    md_lines.append(f"- top_p: `{sampling_params_for_report['top_p']}`")
+    md_lines.append(f"- top_k: `{sampling_params_for_report['top_k']}`")
     md_lines.append(f"- attention_backends: `{', '.join(attention_backends)}`")
     md_lines.append(
         f"- mamba_scheduler_strategy: `{args.mamba_scheduler_strategy}`"
