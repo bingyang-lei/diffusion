@@ -22,6 +22,7 @@ DRAFT_MODELS=(
   # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash_data/epoch_4_step_240000"
   "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash_data/epoch_5_step_295000"
   "/mnt/shared-storage-gpfs2/p1-shared-2/leihaodi/opd-draft/qwen3-4b/16k_global_step_5000_draft"
+  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-teacher-05-08/all-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
 )
 
 # Optional: set to "--skip-base" to skip baseline and only benchmark DFLASH

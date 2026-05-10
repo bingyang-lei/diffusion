@@ -125,6 +125,21 @@ class BenchMetrics:
     spec_verify_ct_sum: int
 
 
+@dataclass(frozen=True)
+class DatasetPromptGroup:
+    name: str
+    requested_count: Optional[int]
+    prompts: list[str]
+
+    @property
+    def spec_text(self) -> str:
+        return (
+            f"{self.name}:{self.requested_count}"
+            if self.requested_count is not None
+            else self.name
+        )
+
+
 def _run_bench_requests(
     base_url: str,
     *,
@@ -333,16 +348,15 @@ def _parse_dataset_specs(raw_specs: list[str]) -> tuple[list[tuple[str, Optional
     return specs, explicit_mode
 
 
-def _build_prompt_texts(
+def _build_prompt_groups(
     *,
     dataset_specs: list[tuple[str, Optional[int]]],
     explicit_mode: bool,
     tokenizer: AutoTokenizer,
     enable_think: bool,
     max_questions: int,
-    max_concurrency: int,
-) -> tuple[list[str], list[str], str]:
-    measured_prompts: list[str] = []
+) -> tuple[list[DatasetPromptGroup], str]:
+    prompt_groups: list[DatasetPromptGroup] = []
     dataset_spec_text = " ".join(
         f"{name}:{count}" if count is not None else name for name, count in dataset_specs
     )
@@ -351,6 +365,7 @@ def _build_prompt_texts(
         for dataset_name, requested_count in dataset_specs:
             dataset = load_and_process_dataset(dataset_name)
             assert requested_count is not None
+            prompts: list[str] = []
             actual_count = min(int(requested_count), len(dataset))
             if actual_count < int(requested_count):
                 print(
@@ -370,14 +385,25 @@ def _build_prompt_texts(
                     add_generation_prompt=True,
                     enable_thinking=enable_think,
                 )
-                measured_prompts.append(prompt_text)
+                prompts.append(prompt_text)
 
-        if not measured_prompts:
+            if not prompts:
+                raise RuntimeError(f"No prompts available for dataset {dataset_name}.")
+            prompt_groups.append(
+                DatasetPromptGroup(
+                    name=dataset_name,
+                    requested_count=requested_count,
+                    prompts=prompts,
+                )
+            )
+
+        if not prompt_groups:
             raise RuntimeError("No prompts available after applying dataset counts.")
     else:
         dataset_name = dataset_specs[0][0]
         print(f"Loading dataset: {dataset_name}...")
         dataset = load_and_process_dataset(dataset_name)
+        prompts: list[str] = []
         if len(dataset) < max_questions:
             print(
                 f"Warning: Dataset has {len(dataset)} items, but need up to {max_questions}. "
@@ -392,12 +418,164 @@ def _build_prompt_texts(
                 add_generation_prompt=True,
                 enable_thinking=enable_think,
             )
-            measured_prompts.append(prompt_text)
+            prompts.append(prompt_text)
 
-    warmup_prompts = [
-        measured_prompts[i % len(measured_prompts)] for i in range(max(max_concurrency, 1))
-    ]
-    return measured_prompts, warmup_prompts, dataset_spec_text
+        if not prompts:
+            raise RuntimeError(f"No prompts available for dataset {dataset_name}.")
+        prompt_groups.append(
+            DatasetPromptGroup(
+                name=dataset_name,
+                requested_count=None,
+                prompts=prompts,
+            )
+        )
+
+    return prompt_groups, dataset_spec_text
+
+
+def _build_warmup_prompts(prompts: list[str], max_concurrency: int) -> list[str]:
+    return [prompts[i % len(prompts)] for i in range(max(max_concurrency, 1))]
+
+
+def _write_markdown_lines(path: str, lines: list[str], mode: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, mode, encoding="utf-8") as f:
+        f.write("\n".join(lines))
+        f.write("\n")
+
+
+def _build_markdown_header(
+    *,
+    args: argparse.Namespace,
+    dataset_spec_text: str,
+    sampling_params_for_report: dict,
+    attention_backends: list[str],
+    tp: int,
+    concurrencies: list[int],
+    explicit_dataset_mode: bool,
+    prompt_groups: list[DatasetPromptGroup],
+    max_questions: int,
+    device_sm: int,
+    is_blackwell: bool,
+) -> list[str]:
+    md_lines: list[str] = []
+    md_lines.append("# DFLASH Bench Report")
+    md_lines.append("")
+    md_lines.append("## Settings")
+    md_lines.append(f"- dataset: `{dataset_spec_text}`")
+    md_lines.append(f"- enable_think: `{bool(args.enable_think)}`")
+    md_lines.append(f"- target_model: `{args.target_model}`")
+    md_lines.append(f"- draft_model: `{args.draft_model}`")
+    md_lines.append(f"- max_new_tokens: `{args.max_new_tokens}`")
+    md_lines.append(f"- temp: `{args.temp}`")
+    md_lines.append(f"- top_p: `{sampling_params_for_report['top_p']}`")
+    md_lines.append(f"- top_k: `{sampling_params_for_report['top_k']}`")
+    md_lines.append(f"- attention_backends: `{', '.join(attention_backends)}`")
+    md_lines.append(
+        f"- mamba_scheduler_strategy: `{args.mamba_scheduler_strategy}`"
+        if args.mamba_scheduler_strategy
+        else "- mamba_scheduler_strategy: `(server default)`"
+    )
+    md_lines.append(f"- tp_size: `{tp}`")
+    md_lines.append(f"- concurrencies: `{', '.join(str(x) for x in concurrencies)}`")
+    md_lines.append(f"- questions_per_concurrency: `base={args.questions_per_concurrency_base}`")
+    if explicit_dataset_mode:
+        md_lines.append("- measured_prompts_per_concurrency: `per dataset spec`")
+        md_lines.append(
+            "- dataset_prompt_counts: `"
+            + ", ".join(f"{group.spec_text}={len(group.prompts)}" for group in prompt_groups)
+            + "`"
+        )
+    else:
+        md_lines.append(
+            f"- measured_prompts_per_concurrency: `varies with concurrency up to {max_questions}`"
+        )
+    md_lines.append(f"- device_sm: `{device_sm}`")
+    md_lines.append(f"- is_blackwell: `{is_blackwell}`")
+    md_lines.append(f"- skip_baseline: `{bool(args.skip_baseline)}`")
+    md_lines.append(
+        f"- output_case: `{args.output_case}`" if args.output_case else "- output_case: `(disabled)`"
+    )
+    md_lines.append("- drop_first_batch: `true`")
+    md_lines.append("")
+    return md_lines
+
+
+def _build_dataset_markdown_section(
+    *,
+    args: argparse.Namespace,
+    backend: str,
+    group: DatasetPromptGroup,
+    concurrencies: list[int],
+    baseline_toks: dict[tuple[str, str, int], Optional[float]],
+    dflash_toks: dict[tuple[str, str, int], Optional[float]],
+    dflash_accept_len: dict[tuple[str, str, int], Optional[float]],
+) -> list[str]:
+    md_lines: list[str] = []
+    md_lines.append(f"### Dataset: `{group.spec_text}`")
+    md_lines.append("")
+    md_lines.append(f"- measured_prompts: `{len(group.prompts)}`")
+    md_lines.append("")
+
+    baseline_values = {
+        c: baseline_toks.get((backend, group.spec_text, c), None)
+        for c in concurrencies
+    }
+    dflash_values = {
+        c: dflash_toks.get((backend, group.spec_text, c), None)
+        for c in concurrencies
+    }
+    speedup_values: dict[int, Optional[float]] = {}
+    for c in concurrencies:
+        b = baseline_values.get(c, None)
+        d = dflash_values.get(c, None)
+        speedup_values[c] = None if (b is None or d is None or b <= 0) else (d / b)
+
+    if not args.skip_baseline:
+        md_lines.append("#### Baseline output tok/s")
+        md_lines.append(
+            _format_table(
+                concurrencies=concurrencies,
+                values=baseline_values,
+                float_fmt=",.2f",
+            )
+        )
+        md_lines.append("")
+
+    md_lines.append("#### DFLASH output tok/s")
+    md_lines.append(
+        _format_table(
+            concurrencies=concurrencies,
+            values=dflash_values,
+            float_fmt=",.2f",
+        )
+    )
+    md_lines.append("")
+
+    if not args.skip_baseline:
+        md_lines.append("#### Speedup (DFLASH / baseline)")
+        md_lines.append(
+            _format_table(
+                concurrencies=concurrencies,
+                values=speedup_values,
+                float_fmt=".3f",
+            )
+        )
+        md_lines.append("")
+
+    md_lines.append("#### DFLASH acceptance length")
+    md_lines.append(
+        _format_table(
+            concurrencies=concurrencies,
+            values={
+                c: dflash_accept_len.get((backend, group.spec_text, c), None)
+                for c in concurrencies
+            },
+            float_fmt=".3f",
+        )
+    )
+    md_lines.append("")
+    return md_lines
 
 
 def main() -> None:
@@ -535,16 +713,15 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(args.target_model)
     dataset_specs, explicit_dataset_mode = _parse_dataset_specs(args.dataset_name)
-    measured_prompts, warmup_prompts, dataset_spec_text = _build_prompt_texts(
+    prompt_groups, dataset_spec_text = _build_prompt_groups(
         dataset_specs=dataset_specs,
         explicit_mode=explicit_dataset_mode,
         tokenizer=tokenizer,
         enable_think=bool(args.enable_think),
         max_questions=max_questions,
-        max_concurrency=max_concurrency,
     )
     if explicit_dataset_mode:
-        total_selected = len(measured_prompts)
+        total_selected = sum(len(group.prompts) for group in prompt_groups)
         print(
             f"Using explicit dataset mixture: {dataset_spec_text} "
             f"(total measured prompts={total_selected})"
@@ -555,14 +732,6 @@ def main() -> None:
             f"Using legacy single-dataset mode: {dataset_name} "
             f"(max measured prompts across concurrencies={max_questions})"
         )
-
-    if explicit_dataset_mode:
-        num_questions_by_conc = {conc: len(measured_prompts) for conc in concurrencies}
-    else:
-        num_questions_by_conc = {
-            conc: min(int(requested_num_questions_by_conc[conc]), len(measured_prompts))
-            for conc in concurrencies
-        }
 
     if args.output_case:
         Path(args.output_case).parent.mkdir(parents=True, exist_ok=True)
@@ -580,16 +749,41 @@ def main() -> None:
                 + "\n"
             )
 
-    # Results indexed by (backend, concurrency) for baseline + dflash.
+    # Results indexed by (backend, dataset_spec, concurrency) for baseline + dflash.
     # Removed TP dimension from keys since we aren't sweeping it.
-    baseline_toks: dict[tuple[str, int], Optional[float]] = {}
-    dflash_toks: dict[tuple[str, int], Optional[float]] = {}
-    dflash_accept_len: dict[tuple[str, int], Optional[float]] = {}
+    baseline_toks: dict[tuple[str, str, int], Optional[float]] = {}
+    dflash_toks: dict[tuple[str, str, int], Optional[float]] = {}
+    dflash_accept_len: dict[tuple[str, str, int], Optional[float]] = {}
     
     tp = args.tp_size  # Fixed TP size
 
+    if args.output_md:
+        _write_markdown_lines(
+            args.output_md,
+            _build_markdown_header(
+                args=args,
+                dataset_spec_text=dataset_spec_text,
+                sampling_params_for_report=sampling_params_for_report,
+                attention_backends=attention_backends,
+                tp=tp,
+                concurrencies=concurrencies,
+                explicit_dataset_mode=explicit_dataset_mode,
+                prompt_groups=prompt_groups,
+                max_questions=max_questions,
+                device_sm=device_sm,
+                is_blackwell=is_blackwell,
+            ),
+            mode="w",
+        )
+
     for backend in attention_backends:
         port_base = find_available_port(20000)
+        if args.output_md:
+            _write_markdown_lines(
+                args.output_md,
+                [f"## Backend: `{backend}`", ""],
+                mode="a",
+            )
 
         common_server_args: list[str] = [
             "--trust-remote-code",
@@ -635,31 +829,44 @@ def main() -> None:
                     timeout_s=min(int(args.timeout_s), 300),
                 )
 
-                for conc in concurrencies:
-                    n = num_questions_by_conc[conc]
-                    _flush_cache(baseline_url)
-                    print(
-                        f"[warmup] run 1 warmup batch (size={conc}) after /flush_cache; excluded from metrics."
+                for group in prompt_groups:
+                    warmup_prompts = _build_warmup_prompts(
+                        group.prompts, max_concurrency
                     )
-                    metrics = _run_bench_requests(
-                        baseline_url,
-                        prompts=warmup_prompts[:conc] + measured_prompts[:n],
-                        max_new_tokens=int(args.max_new_tokens),
-                        temp=float(args.temp),
-                        concurrency=int(conc),
-                        batch_requests=bool(args.batch_requests),
-                        stop=[],
-                        timeout_s=int(args.timeout_s),
-                        expect_dflash=False,
-                        output_case_path=None,
-                        output_case_label=None,
-                    )
-                    baseline_toks[(backend, conc)] = metrics.output_toks_per_s
-                    print(
-                        f"[baseline] conc={conc:>2} n={n:<4} "
-                        f"toks/s={metrics.output_toks_per_s:,.2f} "
-                        f"latency={metrics.latency_s:.1f}s "
-                    )
+                    for conc in concurrencies:
+                        if explicit_dataset_mode:
+                            n = len(group.prompts)
+                        else:
+                            n = min(
+                                int(requested_num_questions_by_conc[conc]),
+                                len(group.prompts),
+                            )
+                        _flush_cache(baseline_url)
+                        print(
+                            f"[warmup] dataset={group.spec_text} run 1 warmup batch "
+                            f"(size={conc}) after /flush_cache; excluded from metrics."
+                        )
+                        metrics = _run_bench_requests(
+                            baseline_url,
+                            prompts=warmup_prompts[:conc] + group.prompts[:n],
+                            max_new_tokens=int(args.max_new_tokens),
+                            temp=float(args.temp),
+                            concurrency=int(conc),
+                            batch_requests=bool(args.batch_requests),
+                            stop=[],
+                            timeout_s=int(args.timeout_s),
+                            expect_dflash=False,
+                            output_case_path=None,
+                            output_case_label=None,
+                        )
+                        baseline_toks[(backend, group.spec_text, conc)] = (
+                            metrics.output_toks_per_s
+                        )
+                        print(
+                            f"[baseline] dataset={group.spec_text} conc={conc:>2} n={n:<4} "
+                            f"toks/s={metrics.output_toks_per_s:,.2f} "
+                            f"latency={metrics.latency_s:.1f}s "
+                        )
             finally:
                 kill_process_tree(baseline_proc.pid)
                 try:
@@ -691,34 +898,64 @@ def main() -> None:
                 stop=[],
                 timeout_s=min(int(args.timeout_s), 300),
             )
-            for conc in concurrencies:
-                n = num_questions_by_conc[conc]
-                _flush_cache(dflash_url)
-                print(
-                    f"[warmup] run 1 warmup batch (size={conc}) after /flush_cache; excluded from metrics."
-                )
-                metrics = _run_bench_requests(
-                    dflash_url,
-                    prompts=warmup_prompts[:conc] + measured_prompts[:n],
-                    max_new_tokens=int(args.max_new_tokens),
-                    temp=float(args.temp),
-                    concurrency=int(conc),
-                    batch_requests=bool(args.batch_requests),
-                    stop=[],
-                    timeout_s=int(args.timeout_s),
-                    expect_dflash=True,
-                    output_case_path=args.output_case,
-                    output_case_label=f"backend={backend} tp={tp} conc={conc} (DFLASH)",
-                )
-                dflash_toks[(backend, conc)] = metrics.output_toks_per_s
-                dflash_accept_len[(backend, conc)] = metrics.spec_accept_length
-                print(
-                    f"[DFLASH]   conc={conc:>2} n={n:<4} "
-                    f"toks/s={metrics.output_toks_per_s:,.2f} "
-                    f"latency={metrics.latency_s:.1f}s "
-                    f"accept_len={metrics.spec_accept_length:.3f} "
-                    f"spec_verify_ct_sum={metrics.spec_verify_ct_sum}"
-                )
+            for group in prompt_groups:
+                warmup_prompts = _build_warmup_prompts(group.prompts, max_concurrency)
+                for conc in concurrencies:
+                    if explicit_dataset_mode:
+                        n = len(group.prompts)
+                    else:
+                        n = min(
+                            int(requested_num_questions_by_conc[conc]),
+                            len(group.prompts),
+                        )
+                    _flush_cache(dflash_url)
+                    print(
+                        f"[warmup] dataset={group.spec_text} run 1 warmup batch "
+                        f"(size={conc}) after /flush_cache; excluded from metrics."
+                    )
+                    metrics = _run_bench_requests(
+                        dflash_url,
+                        prompts=warmup_prompts[:conc] + group.prompts[:n],
+                        max_new_tokens=int(args.max_new_tokens),
+                        temp=float(args.temp),
+                        concurrency=int(conc),
+                        batch_requests=bool(args.batch_requests),
+                        stop=[],
+                        timeout_s=int(args.timeout_s),
+                        expect_dflash=True,
+                        output_case_path=args.output_case,
+                        output_case_label=(
+                            f"dataset={group.spec_text} backend={backend} "
+                            f"tp={tp} conc={conc} (DFLASH)"
+                        ),
+                    )
+                    dflash_toks[(backend, group.spec_text, conc)] = (
+                        metrics.output_toks_per_s
+                    )
+                    dflash_accept_len[(backend, group.spec_text, conc)] = (
+                        metrics.spec_accept_length
+                    )
+                    print(
+                        f"[DFLASH]   dataset={group.spec_text} conc={conc:>2} n={n:<4} "
+                        f"toks/s={metrics.output_toks_per_s:,.2f} "
+                        f"latency={metrics.latency_s:.1f}s "
+                        f"accept_len={metrics.spec_accept_length:.3f} "
+                        f"spec_verify_ct_sum={metrics.spec_verify_ct_sum}"
+                    )
+                if args.output_md:
+                    _write_markdown_lines(
+                        args.output_md,
+                        _build_dataset_markdown_section(
+                            args=args,
+                            backend=backend,
+                            group=group,
+                            concurrencies=concurrencies,
+                            baseline_toks=baseline_toks,
+                            dflash_toks=dflash_toks,
+                            dflash_accept_len=dflash_accept_len,
+                        ),
+                        mode="a",
+                    )
         finally:
             kill_process_tree(dflash_proc.pid)
             try:
@@ -726,109 +963,8 @@ def main() -> None:
             except Exception:
                 pass
 
-    # Render markdown.
-    md_lines: list[str] = []
-    md_lines.append("# DFLASH Bench Report")
-    md_lines.append("")
-    md_lines.append("## Settings")
-    md_lines.append(f"- dataset: `{dataset_spec_text}`")
-    md_lines.append(f"- enable_think: `{bool(args.enable_think)}`")
-    md_lines.append(f"- target_model: `{args.target_model}`")
-    md_lines.append(f"- draft_model: `{args.draft_model}`")
-    md_lines.append(f"- max_new_tokens: `{args.max_new_tokens}`")
-    md_lines.append(f"- temp: `{args.temp}`")
-    md_lines.append(f"- top_p: `{sampling_params_for_report['top_p']}`")
-    md_lines.append(f"- top_k: `{sampling_params_for_report['top_k']}`")
-    md_lines.append(f"- attention_backends: `{', '.join(attention_backends)}`")
-    md_lines.append(
-        f"- mamba_scheduler_strategy: `{args.mamba_scheduler_strategy}`"
-        if args.mamba_scheduler_strategy
-        else "- mamba_scheduler_strategy: `(server default)`"
-    )
-    md_lines.append(f"- tp_size: `{tp}`")
-    md_lines.append(f"- concurrencies: `{', '.join(str(x) for x in concurrencies)}`")
-    md_lines.append(f"- questions_per_concurrency: `base={args.questions_per_concurrency_base}`")
-    if explicit_dataset_mode:
-        md_lines.append(
-            f"- measured_prompts_per_concurrency: `{len(measured_prompts)}`"
-        )
-    else:
-        md_lines.append(
-            f"- measured_prompts_per_concurrency: `varies with concurrency up to {max_questions}`"
-        )
-    md_lines.append(f"- device_sm: `{device_sm}`")
-    md_lines.append(f"- is_blackwell: `{is_blackwell}`")
-    md_lines.append(f"- skip_baseline: `{bool(args.skip_baseline)}`")
-    md_lines.append(
-        f"- output_case: `{args.output_case}`" if args.output_case else "- output_case: `(disabled)`"
-    )
-    md_lines.append("- drop_first_batch: `true`")
-    md_lines.append("")
-
-    for backend in attention_backends:
-        md_lines.append(f"## Backend: `{backend}`")
-        md_lines.append("")
-
-        baseline_values = {
-            c: baseline_toks.get((backend, c), None) for c in concurrencies
-        }
-        dflash_values = {
-            c: dflash_toks.get((backend, c), None) for c in concurrencies
-        }
-        speedup_values: dict[int, Optional[float]] = {}
-        for c in concurrencies:
-            b = baseline_values.get(c, None)
-            d = dflash_values.get(c, None)
-            speedup_values[c] = None if (b is None or d is None or b <= 0) else (d / b)
-
-        md_lines.append("### Baseline output tok/s")
-        md_lines.append(
-            _format_table(
-                concurrencies=concurrencies,
-                values=baseline_values,
-                float_fmt=",.2f",
-            )
-        )
-        md_lines.append("")
-        
-        md_lines.append("### DFLASH output tok/s")
-        md_lines.append(
-            _format_table(
-                concurrencies=concurrencies,
-                values=dflash_values,
-                float_fmt=",.2f",
-            )
-        )
-        md_lines.append("")
-
-        md_lines.append("### Speedup (DFLASH / baseline)")
-        md_lines.append(
-            _format_table(
-                concurrencies=concurrencies,
-                values=speedup_values,
-                float_fmt=".3f",
-            )
-        )
-        md_lines.append("")
-
-        md_lines.append("### DFLASH acceptance length")
-        md_lines.append(
-            _format_table(
-                concurrencies=concurrencies,
-                values={
-                    c: dflash_accept_len.get((backend, c), None)
-                    for c in concurrencies
-                },
-                float_fmt=".3f",
-            )
-        )
-        md_lines.append("")
-
     if args.output_md:
-        with open(args.output_md, "w", encoding="utf-8") as f:
-            f.write("\n".join(md_lines))
-            f.write("\n")
-        print(f"\nWrote markdown report to: {args.output_md}")
+        print(f"\nWrote markdown report incrementally to: {args.output_md}")
     else:
         print("\nMarkdown report disabled (pass --output-md to write one).")
 
