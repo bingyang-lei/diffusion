@@ -150,7 +150,7 @@ def _run_bench_requests(
     batch_requests: bool,
     stop: list[str],
     timeout_s: int,
-    expect_dflash: bool,
+    expect_speculative: bool,
     output_case_path: Optional[str] = None,
     output_case_label: Optional[str] = None,
 ) -> BenchMetrics:
@@ -255,10 +255,10 @@ def _run_bench_requests(
     latency = time.perf_counter() - start
     toks_per_s = total_tokens / max(latency, 1e-6)
 
-    if expect_dflash and spec_verify_ct_sum <= 0:
+    if expect_speculative and spec_verify_ct_sum <= 0:
         raise RuntimeError(
-            "DFLASH sanity check failed: did not observe any `spec_verify_ct` in responses "
-            "(DFLASH may not have been enabled)."
+            "Speculative decoding sanity check failed: did not observe any "
+            "`spec_verify_ct` in responses (speculative decoding may not have been enabled)."
         )
 
     spec_accept_length = (
@@ -437,6 +437,26 @@ def _build_warmup_prompts(prompts: list[str], max_concurrency: int) -> list[str]
     return [prompts[i % len(prompts)] for i in range(max(max_concurrency, 1))]
 
 
+def _build_speculative_server_args(args: argparse.Namespace) -> list[str]:
+    if not args.draft_model:
+        raise RuntimeError("A draft model is required for speculative decoding.")
+    spec_args = [
+        "--speculative-algorithm",
+        str(args.speculative_algorithm).upper(),
+        "--speculative-draft-model-path",
+        args.draft_model,
+    ]
+    optional_args = [
+        ("--speculative-num-steps", args.speculative_num_steps),
+        ("--speculative-eagle-topk", args.speculative_eagle_topk),
+        ("--speculative-num-draft-tokens", args.speculative_num_draft_tokens),
+    ]
+    for flag, value in optional_args:
+        if value is not None:
+            spec_args.extend([flag, str(value)])
+    return spec_args
+
+
 def _write_markdown_lines(path: str, lines: list[str], mode: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, mode, encoding="utf-8") as f:
@@ -458,14 +478,33 @@ def _build_markdown_header(
     device_sm: int,
     is_blackwell: bool,
 ) -> list[str]:
+    spec_label = str(args.speculative_algorithm).upper()
     md_lines: list[str] = []
-    md_lines.append("# DFLASH Bench Report")
+    title = (
+        "Baseline Bench Report"
+        if not args.run_speculative
+        else f"{spec_label} Bench Report"
+    )
+    md_lines.append(f"# {title}")
     md_lines.append("")
     md_lines.append("## Settings")
+    md_lines.append(f"- mode: `{args.bench_mode}`")
     md_lines.append(f"- dataset: `{dataset_spec_text}`")
     md_lines.append(f"- enable_think: `{bool(args.enable_think)}`")
     md_lines.append(f"- target_model: `{args.target_model}`")
-    md_lines.append(f"- draft_model: `{args.draft_model}`")
+    md_lines.append(
+        f"- draft_model: `{args.draft_model}`" if args.draft_model else "- draft_model: `(none)`"
+    )
+    if args.run_speculative:
+        md_lines.append(f"- speculative_algorithm: `{spec_label}`")
+        if args.speculative_num_steps is not None:
+            md_lines.append(f"- speculative_num_steps: `{args.speculative_num_steps}`")
+        if args.speculative_eagle_topk is not None:
+            md_lines.append(f"- speculative_eagle_topk: `{args.speculative_eagle_topk}`")
+        if args.speculative_num_draft_tokens is not None:
+            md_lines.append(
+                f"- speculative_num_draft_tokens: `{args.speculative_num_draft_tokens}`"
+            )
     md_lines.append(f"- max_new_tokens: `{args.max_new_tokens}`")
     md_lines.append(f"- temp: `{args.temp}`")
     md_lines.append(f"- top_p: `{sampling_params_for_report['top_p']}`")
@@ -492,7 +531,8 @@ def _build_markdown_header(
         )
     md_lines.append(f"- device_sm: `{device_sm}`")
     md_lines.append(f"- is_blackwell: `{is_blackwell}`")
-    md_lines.append(f"- skip_baseline: `{bool(args.skip_baseline)}`")
+    md_lines.append(f"- run_baseline: `{bool(args.run_baseline)}`")
+    md_lines.append(f"- run_speculative: `{bool(args.run_speculative)}`")
     md_lines.append(
         f"- output_case: `{args.output_case}`" if args.output_case else "- output_case: `(disabled)`"
     )
@@ -511,6 +551,7 @@ def _build_dataset_markdown_section(
     dflash_toks: dict[tuple[str, str, int], Optional[float]],
     dflash_accept_len: dict[tuple[str, str, int], Optional[float]],
 ) -> list[str]:
+    spec_label = str(args.speculative_algorithm).upper()
     md_lines: list[str] = []
     md_lines.append(f"### Dataset: `{group.spec_text}`")
     md_lines.append("")
@@ -531,7 +572,7 @@ def _build_dataset_markdown_section(
         d = dflash_values.get(c, None)
         speedup_values[c] = None if (b is None or d is None or b <= 0) else (d / b)
 
-    if not args.skip_baseline:
+    if args.run_baseline:
         md_lines.append("#### Baseline output tok/s")
         md_lines.append(
             _format_table(
@@ -542,18 +583,19 @@ def _build_dataset_markdown_section(
         )
         md_lines.append("")
 
-    md_lines.append("#### DFLASH output tok/s")
-    md_lines.append(
-        _format_table(
-            concurrencies=concurrencies,
-            values=dflash_values,
-            float_fmt=",.2f",
+    if args.run_speculative:
+        md_lines.append(f"#### {spec_label} output tok/s")
+        md_lines.append(
+            _format_table(
+                concurrencies=concurrencies,
+                values=dflash_values,
+                float_fmt=",.2f",
+            )
         )
-    )
-    md_lines.append("")
+        md_lines.append("")
 
-    if not args.skip_baseline:
-        md_lines.append("#### Speedup (DFLASH / baseline)")
+    if args.run_baseline and args.run_speculative:
+        md_lines.append(f"#### Speedup ({spec_label} / baseline)")
         md_lines.append(
             _format_table(
                 concurrencies=concurrencies,
@@ -563,18 +605,19 @@ def _build_dataset_markdown_section(
         )
         md_lines.append("")
 
-    md_lines.append("#### DFLASH acceptance length")
-    md_lines.append(
-        _format_table(
-            concurrencies=concurrencies,
-            values={
-                c: dflash_accept_len.get((backend, group.spec_text, c), None)
-                for c in concurrencies
-            },
-            float_fmt=".3f",
+    if args.run_speculative:
+        md_lines.append(f"#### {spec_label} acceptance length")
+        md_lines.append(
+            _format_table(
+                concurrencies=concurrencies,
+                values={
+                    c: dflash_accept_len.get((backend, group.spec_text, c), None)
+                    for c in concurrencies
+                },
+                float_fmt=".3f",
+            )
         )
-    )
-    md_lines.append("")
+        md_lines.append("")
     return md_lines
 
 
@@ -597,13 +640,40 @@ def main() -> None:
         ),
     )
     parser.add_argument("--target-model", type=str, default="Qwen/Qwen3-8B")
-    parser.add_argument("--draft-model", type=str, default="z-lab/Qwen3-8B-DFlash-b16")
+    parser.add_argument("--draft-model", type=str, default=None)
     parser.add_argument(
-        "--skip-baseline",
-        "--skip-base",
+        "--speculative-algorithm",
+        type=str,
+        default="DFLASH",
+        help="Speculative decoding algorithm to pass to the SGLang server.",
+    )
+    parser.add_argument(
+        "--speculative-num-steps",
+        type=int,
+        default=None,
+        help="Optional SGLang --speculative-num-steps value.",
+    )
+    parser.add_argument(
+        "--speculative-eagle-topk",
+        type=int,
+        default=None,
+        help="Optional SGLang --speculative-eagle-topk value.",
+    )
+    parser.add_argument(
+        "--speculative-num-draft-tokens",
+        type=int,
+        default=None,
+        help="Optional SGLang --speculative-num-draft-tokens value.",
+    )
+    parser.add_argument(
+        "--only-baseline",
         action="store_true",
-        dest="skip_baseline",
-        help="Skip running the baseline (target-only) sweep; only run DFLASH and report N/A for baseline/speedup.",
+        help="Run target-model baseline only. If --draft-model is omitted, this mode is selected automatically.",
+    )
+    parser.add_argument(
+        "--add-base",
+        action="store_true",
+        help="When --draft-model is set, also run the target-model baseline and report speedup.",
     )
     parser.add_argument(
         "--batch-requests",
@@ -677,11 +747,30 @@ def main() -> None:
         default=None,
         metavar="PATH",
         help=(
-            "If set, append DFLASH measured completions (JSON lines: idx, prompt, completion) "
+            "If set, append speculative-decoding measured completions (JSON lines: idx, prompt, completion) "
             "to this path for each (backend, concurrency) run."
         ),
     )
     args = parser.parse_args()
+    if args.draft_model is not None:
+        args.draft_model = str(args.draft_model).strip()
+        if args.draft_model.lower() in {"", "none", "null"}:
+            args.draft_model = None
+    if args.only_baseline and args.draft_model:
+        print("Warning: --only-baseline was set, so --draft-model will be ignored.")
+        args.draft_model = None
+    if args.add_base and not args.draft_model:
+        print("Warning: --add-base was set without --draft-model; running baseline only.")
+
+    args.run_speculative = bool(args.draft_model) and not bool(args.only_baseline)
+    args.run_baseline = bool(args.only_baseline) or bool(args.add_base) or not args.run_speculative
+    if args.run_baseline and args.run_speculative:
+        args.bench_mode = "speculative_with_baseline"
+    elif args.run_speculative:
+        args.bench_mode = "speculative_only"
+    else:
+        args.bench_mode = "baseline_only"
+    spec_label = str(args.speculative_algorithm).upper()
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for this sweep.")
@@ -733,7 +822,7 @@ def main() -> None:
             f"(max measured prompts across concurrencies={max_questions})"
         )
 
-    if args.output_case:
+    if args.output_case and args.run_speculative:
         Path(args.output_case).parent.mkdir(parents=True, exist_ok=True)
         with open(args.output_case, "w", encoding="utf-8") as f:
             f.write(
@@ -742,19 +831,23 @@ def main() -> None:
                         "kind": "benchmark_sglang_case_outputs",
                         "dataset": dataset_spec_text,
                         "enable_think": bool(args.enable_think),
-                        "note": "DFLASH measured prompts only (warmup batch excluded); JSONL records follow.",
+                        "speculative_algorithm": spec_label,
+                        "note": (
+                            f"{spec_label} measured prompts only "
+                            "(warmup batch excluded); JSONL records follow."
+                        ),
                     },
                     ensure_ascii=False,
                 )
                 + "\n"
             )
 
-    # Results indexed by (backend, dataset_spec, concurrency) for baseline + dflash.
+    # Results indexed by (backend, dataset_spec, concurrency).
     # Removed TP dimension from keys since we aren't sweeping it.
     baseline_toks: dict[tuple[str, str, int], Optional[float]] = {}
     dflash_toks: dict[tuple[str, str, int], Optional[float]] = {}
     dflash_accept_len: dict[tuple[str, str, int], Optional[float]] = {}
-    
+
     tp = args.tp_size  # Fixed TP size
 
     if args.output_md:
@@ -808,7 +901,7 @@ def main() -> None:
                 ["--mamba-scheduler-strategy", str(args.mamba_scheduler_strategy).strip()]
             )
 
-        if not args.skip_baseline:
+        if args.run_baseline:
             print(f"\n=== backend={backend} tp={tp} (baseline) ===")
             baseline_port = port_base
             baseline_url = f"http://127.0.0.1:{baseline_port}"
@@ -855,7 +948,7 @@ def main() -> None:
                             batch_requests=bool(args.batch_requests),
                             stop=[],
                             timeout_s=int(args.timeout_s),
-                            expect_dflash=False,
+                            expect_speculative=False,
                             output_case_path=None,
                             output_case_label=None,
                         )
@@ -867,6 +960,20 @@ def main() -> None:
                             f"toks/s={metrics.output_toks_per_s:,.2f} "
                             f"latency={metrics.latency_s:.1f}s "
                         )
+                    if args.output_md and not args.run_speculative:
+                        _write_markdown_lines(
+                            args.output_md,
+                            _build_dataset_markdown_section(
+                                args=args,
+                                backend=backend,
+                                group=group,
+                                concurrencies=concurrencies,
+                                baseline_toks=baseline_toks,
+                                dflash_toks=dflash_toks,
+                                dflash_accept_len=dflash_accept_len,
+                            ),
+                            mode="a",
+                        )
             finally:
                 kill_process_tree(baseline_proc.pid)
                 try:
@@ -874,7 +981,10 @@ def main() -> None:
                 except Exception:
                     pass
 
-        print(f"\n=== backend={backend} tp={tp} (DFLASH) ===")
+        if not args.run_speculative:
+            continue
+
+        print(f"\n=== backend={backend} tp={tp} ({spec_label}) ===")
         dflash_port = find_available_port(port_base + 1)
         dflash_url = f"http://127.0.0.1:{dflash_port}"
         dflash_proc = popen_launch_server(
@@ -883,10 +993,7 @@ def main() -> None:
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=[
                 *common_server_args,
-                "--speculative-algorithm",
-                "DFLASH",
-                "--speculative-draft-model-path",
-                args.draft_model,
+                *_build_speculative_server_args(args),
             ],
         )
         try:
@@ -922,11 +1029,11 @@ def main() -> None:
                         batch_requests=bool(args.batch_requests),
                         stop=[],
                         timeout_s=int(args.timeout_s),
-                        expect_dflash=True,
+                        expect_speculative=True,
                         output_case_path=args.output_case,
                         output_case_label=(
                             f"dataset={group.spec_text} backend={backend} "
-                            f"tp={tp} conc={conc} (DFLASH)"
+                            f"tp={tp} conc={conc} ({spec_label})"
                         ),
                     )
                     dflash_toks[(backend, group.spec_text, conc)] = (
@@ -935,11 +1042,16 @@ def main() -> None:
                     dflash_accept_len[(backend, group.spec_text, conc)] = (
                         metrics.spec_accept_length
                     )
+                    accept_len_text = (
+                        "N/A"
+                        if metrics.spec_accept_length is None
+                        else f"{metrics.spec_accept_length:.3f}"
+                    )
                     print(
-                        f"[DFLASH]   dataset={group.spec_text} conc={conc:>2} n={n:<4} "
+                        f"[{spec_label}]   dataset={group.spec_text} conc={conc:>2} n={n:<4} "
                         f"toks/s={metrics.output_toks_per_s:,.2f} "
                         f"latency={metrics.latency_s:.1f}s "
-                        f"accept_len={metrics.spec_accept_length:.3f} "
+                        f"accept_len={accept_len_text} "
                         f"spec_verify_ct_sum={metrics.spec_verify_ct_sum}"
                     )
                 if args.output_md:
@@ -968,8 +1080,8 @@ def main() -> None:
     else:
         print("\nMarkdown report disabled (pass --output-md to write one).")
 
-    if args.output_case:
-        print(f"Wrote DFLASH case outputs (JSONL) to: {args.output_case}")
+    if args.output_case and args.run_speculative:
+        print(f"Wrote {spec_label} case outputs (JSONL) to: {args.output_case}")
 
 
 if __name__ == "__main__":

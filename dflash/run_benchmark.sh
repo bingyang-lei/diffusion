@@ -3,9 +3,7 @@
 # Optional: ./run_benchmark.sh --log-dir /path/to/logs
 # If omitted, uses the default log_dir below.
 bash /mnt/shared-storage-user/leihaodi/diffusion/dflash/sglang_run_bench.sh
-pkill -9 python
-pkill -9 sglang
-sleep 1
+sleep 10
 source /mnt/shared-storage-user/p1-shared/leihaodi/miniconda3/bin/activate python312
 export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
 export HF_HOME="/mnt/shared-storage-user/p1-shared/leihaodi/pretrain/hf_cache"
@@ -21,24 +19,23 @@ else
   num_gpu=$(nvidia-smi -L 2>/dev/null | wc -l)
 fi
 cd /mnt/shared-storage-user/leihaodi/diffusion/dflash
-log_dir="/mnt/shared-storage-user/leihaodi/diffusion/logs/verl-opd-mathcode-16k-ablation"
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --log-dir)
-      if [ -z "${2:-}" ]; then
-        echo "usage: $0 [--log-dir PATH]" >&2
-        exit 1
-      fi
-      log_dir="$2"
-      shift 2
-      ;;
-    *)
-      echo "unknown option: $1" >&2
-      echo "usage: $0 [--log-dir PATH]" >&2
-      exit 1
-      ;;
-  esac
-done
+# while [ $# -gt 0 ]; do
+#   case "$1" in
+#     --log-dir)
+#       if [ -z "${2:-}" ]; then
+#         echo "usage: $0 [--log-dir PATH]" >&2
+#         exit 1
+#       fi
+#       log_dir="$2"
+#       shift 2
+#       ;;
+#     *)
+#       echo "unknown option: $1" >&2
+#       echo "usage: $0 [--log-dir PATH]" >&2
+#       exit 1
+#       ;;
+#   esac
+# done
 
 TASKS=(
   "gsm8k:128"
@@ -51,18 +48,22 @@ TASKS=(
   "mgsm_zh:32"
   "swe-bench:128"
   "alpaca:128"
-  # "livecodebench:128"
-    # "acp_app_bool:32"
-  # "acp_app_gen:32"
+  
+  "aime26:30"
 )
 
 print_case=false
+log_dir="/mnt/shared-storage-user/leihaodi/diffusion/logs/verl-opd-mathcode-16k-ablation/mbppdata"
 mkdir -p "$log_dir"
 DRAFT_MODELS=(
-  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-teacher-05-08/all-reverse-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_2500/draft_model"
-  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-teacher-05-08/all-reverse-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
-  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-teacher-05-08/all-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_2500/draft_model"
-  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-teacher-05-08/all-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
+  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/all-forward-fsdp-draftmodel-0_lr-3e-4-random_anchor-False/student-teacher-05-11/k3/train-mathcode16k_mbpp_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
+  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/all-forward-fsdp-draftmodel-0_lr-3e-4-random_anchor-False/student-teacher-05-11/k3/train-mathcode16k_mbpp_user_prompt-update-accumulation-steps/global_step_5500/draft_model"
+  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/all-forward-fsdp-draftmodel-0_lr-3e-4-random_anchor-False/student-teacher-05-11/k3/train-mathcode16k_mbpp_user_prompt-update-accumulation-steps/global_step_6000/draft_model"
+  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/all-forward-fsdp-draftmodel-0_lr-3e-4-random_anchor-False/student-teacher-05-11/k3/train-mathcode16k_mbpp_user_prompt-update-accumulation-steps/global_step_6500/draft_model"
+  
+  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/all-forward-no-decay-fsdp-draftmodel-0_lr-3e-4-random_anchor-False/student-teacher-05-10/k3/train-mathcode16k_mbpp_user_prompt-update-accumulation-steps/global_step_6000/draft_model"
+  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/all-forward-no-decay-fsdp-draftmodel-0_lr-3e-4-random_anchor-False/student-teacher-05-10/k3/train-mathcode16k_mbpp_user_prompt-update-accumulation-steps/global_step_6500/draft_model"
+
   # "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-1900/student-teacher-05-06/loss-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
   # "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-1900/student-teacher-05-06/loss-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_4500/draft_model"
   # "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-1900/student-teacher-05-06/loss-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_4000/draft_model"
@@ -129,17 +130,16 @@ for draft_path in "${DRAFT_MODELS[@]}"; do
         "${THINKING_ARGS[@]}" \
         | tee -a "$log_file"
         # --save-acc-len "${log_dir}/8192-${draft_tag}-${DATASET_NAME}.csv" | tee -a "$log_file"
-        
-
     done
   done
 done
 
+
+log_dir="/mnt/shared-storage-user/leihaodi/diffusion/logs/verl-opd-mathcode-16k-ablation/temp1"
+mkdir -p "$log_dir"
 DRAFT_MODELS=(
-  "/mnt/shared-storage-gpfs2/p1-shared-2/leihaodi/opd-draft/qwen3-4b/baseline"
-  "/mnt/shared-storage-gpfs2/p1-shared-2/leihaodi/opd-draft/qwen3-4b/16k_global_step_5000_draft"
-  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-teacher-05-08/all-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_2500/draft_model"
-  "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-teacher-05-08/all-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
+  "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash_data/epoch_5_step_295000"
+  "/mnt/shared-storage-gpfs2/p1-shared-2/leihaodi/opd-draft/qwen3-4b/16k_global_step_5000_draft/"
 )
 
 for draft_path in "${DRAFT_MODELS[@]}"; do
@@ -197,8 +197,6 @@ for draft_path in "${DRAFT_MODELS[@]}"; do
         "${THINKING_ARGS[@]}" \
         | tee -a "$log_file"
         # --save-acc-len "${log_dir}/8192-${draft_tag}-${DATASET_NAME}.csv" | tee -a "$log_file"
-        
-
     done
   done
 done

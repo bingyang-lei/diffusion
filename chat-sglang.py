@@ -3,7 +3,7 @@
 import requests
 import time
 import json
-port = 30000
+port = 30001
 url = f"http://localhost:{port}/v1/responses"
 context = """
 Janet had 22 green pens and 10 yellow pens. Then she bought 6 bags of blue pens and 2 bags of red pens. There were 9 pens in each bag of blue and 6 pens in each bag of red. How many pens does Janet have now?\nPlease reason step by step, and put your final answer within \\boxed{}
@@ -26,8 +26,6 @@ Janet had 22 green pens and 10 yellow pens. Then she bought 6 bags of blue pens 
 # """  # AIME answer: 33
 # context = "hello, introduce yourself"
 # context = "Write a python function to find the longest chain which can be formed from the given set of pairs[]."
-
-
 
 # data = {
 #     "model": "None",

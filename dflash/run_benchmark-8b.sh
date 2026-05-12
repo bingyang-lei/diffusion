@@ -18,7 +18,7 @@ else
 fi
 cd /mnt/shared-storage-user/leihaodi/diffusion/dflash
 # sleep 10000
-log_dir="/mnt/shared-storage-user/leihaodi/diffusion/qwen3-8b/baseline/draft.log"
+log_dir="/mnt/shared-storage-user/leihaodi/diffusion/qwen3-8b/temp1"
 while [ $# -gt 0 ]; do
   case "$1" in
     --log-dir)
@@ -45,11 +45,11 @@ TASKS=(
   "mbpp:128"
   "humaneval:164"
   "mt-bench:80"
-
   "mgsm_zh:32"
   "swe-bench:128"
-
   "alpaca:128"
+  "aime26:30"
+
     # "acp_app_bool:32"
   # "acp_app_gen:32"
   # "livecodebench:128"
@@ -58,13 +58,16 @@ TASKS=(
 print_case=false
 mkdir -p "$log_dir"
 DRAFT_MODELS=(
-  # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash_data/epoch_5_step_295000"
-  # "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/fsdp-draftmodel-1900/student-teacher-05-06/loss-forward-kl-k3/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
-  # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash-resume-data-mathcode16k/epoch_5_step_6000"
-  # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-4b-dflash-resume-data-mathcode16k/epoch_9_step_10000"
-  "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_4_step_240000"
-  "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_4_step_200000"
+  # "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/8b-fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-7-teacher-1-05-09/bsz-21-micro-1/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5500/draft_model"
+  # "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/8b-fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-7-teacher-1-05-09/bsz-21-micro-1/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_5000/draft_model"
+  # "/mnt/shared-storage-user/leihaodi/opd/verl/checkpoints/verl-dflash-opd/8b-fsdp-draftmodel-0_lr-3e-4-decay-True-random_anchor-False/student-7-teacher-1-05-09/bsz-21-micro-1/train-apos-4000_code-5000_math-5000_gsm8k-2000_user_prompt-update-accumulation-steps/global_step_6000/draft_model"
+  
+  # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_4_step_240000"
+  # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_4_step_200000"
+  # "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_5_step_280000"
+
   "/mnt/shared-storage-user/leihaodi/imo/SpecForge/outputs/qwen3-8b-dflash/epoch_5_step_280000"
+  "/mnt/shared-storage-gpfs2/p1-shared-2/leihaodi/opd-draft/qwen3-8b/16k_global_step_5500_draft"
 )
 
 for draft_path in "${DRAFT_MODELS[@]}"; do
@@ -116,7 +119,7 @@ for draft_path in "${DRAFT_MODELS[@]}"; do
         --draft-name-or-path "$draft_path" \
         --max-new-tokens 8192 \
         --block-size 16 \
-        --temperature 0.0 \
+        --temperature 1.0 \
         --skip-base \
         "${CASE_ARGS[@]}" \
         "${THINKING_ARGS[@]}" \
@@ -127,66 +130,5 @@ for draft_path in "${DRAFT_MODELS[@]}"; do
     done
   done
 done
-
-# for draft_path in "${DRAFT_MODELS[@]}"; do
-#   draft_group=$(basename "$(dirname "$draft_path")")
-#   draft_group=${draft_group#qwen3-4b-}
-#   draft_step=$(basename "$draft_path")
-#   draft_tag="${draft_group}_${draft_step}"
-#   # for thinking_mode in "off" "on"; do
-#   for thinking_mode in "on"; do
-#     if [ "$thinking_mode" = "on" ]; then
-#       THINKING_ARGS=(--enable-thinking)
-#     else
-#       THINKING_ARGS=()
-#     fi
-#     if [ "$print_case" = "true" ]; then
-#       CASE_ARGS=(--case)
-#     else
-#       CASE_ARGS=()
-#     fi
-
-#     echo "CASE_ARGS: ${CASE_ARGS[@]}"
-#     echo "THINKING_ARGS: ${THINKING_ARGS[@]}"
-#     sleep 1
-
-#     log_name="3-${draft_tag}-${thinking_mode}.log"
-#     log_file="${log_dir}/${log_name}"
-#     # : > "$log_file"
-
-#     echo "############################################################"
-#     echo "Draft model: $draft_path" | tee -a "$log_file"
-#     echo "Thinking mode: $thinking_mode"
-#     echo "Log file: $log_file"
-#     echo "############################################################"
-
-#     for task in "${TASKS[@]}"; do
-#       IFS=':' read -r DATASET_NAME MAX_SAMPLES <<< "$task"
-
-#       echo "========================================================"
-#       echo "Running Benchmark: $DATASET_NAME with $MAX_SAMPLES samples (draft: $draft_tag, thinking: $thinking_mode)"
-#       echo "========================================================"
-
-#       torchrun \
-#         --nproc_per_node="${num_gpu}" \
-#         --master_port=29600 \
-#         ./benchmark.py \
-#         --dataset "$DATASET_NAME" \
-#         --max-samples "$MAX_SAMPLES" \
-#         --model-name-or-path /mnt/shared-storage-user/p1-shared/Qwen/Qwen3-4B \
-#         --draft-name-or-path "$draft_path" \
-#         --max-new-tokens 8192 \
-#         --block-size 16 \
-#         --temperature 0.0 \
-#         --skip-base \
-#         "${CASE_ARGS[@]}" \
-#         "${THINKING_ARGS[@]}" \
-#         | tee -a "$log_file"
-#         # --save-acc-len "${log_dir}/8192-${draft_tag}-${DATASET_NAME}.csv" | tee -a "$log_file"
-        
-
-#     done
-#   done
-# done
 
 # python /mnt/shared-storage-user/leihaodi/gpu_stress_test.py
